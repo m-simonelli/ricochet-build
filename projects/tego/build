@@ -17,6 +17,63 @@ export PATH=/var/tmp/dist/cmake/bin:$PATH
 tar -C /var/tmp/build -xf [% project %]-[% c('version') %].tar.gz
 cd /var/tmp/build/[% project %]-[% c('version') %]/
 
+mkdir -p /var/tmp/dist/pluggables
+tar -C /var/tmp/dist/pluggables -xf $rootdir/pluggable-transports.tar.gz
+
+# Generate the pluggables header
+# 1. create a std::map of bridgeType.N -> bridgestring where N is an integer >0
+# TODO: since the map is rather small, this can be optimized into a "constexpr"
+# map (see Jason Turner's C++ weekly ep 233) - although for how much this map
+# is used, it might not be worth the added effort.
+PT_HEADER_PATH=/var/tmp/build/[% project %]-[% c('version') %]/src/libtego_ui/pluggables.hpp
+touch $PT_HEADER_PATH
+echo "#pragma once" > $PT_HEADER_PATH
+echo "const std::map<std::string, std::string> defaultBridges = {" >> $PT_HEADER_PATH
+function bridges_conf {
+  local pt="$1"
+  local i=1
+  while read -r line
+  do
+    echo "    {\"$pt.$i\", \"$line\"}," >> "$PT_HEADER_PATH"
+    i=$((i + 1))
+  done < "/var/tmp/dist/pluggables/bridges_list.$pt.txt"
+}
+bridges_conf obfs4
+bridges_conf meek-azure
+bridges_conf snowflake
+
+# 2. remove the last ',' character so we can close this map
+sed -i '$ s/,$//' $PT_HEADER_PATH
+echo "};" >> $PT_HEADER_PATH
+
+# 3. set obfs4 as the recommended bridge type
+echo "constexpr std::string_view recommendedBridgeType = \"obfs4\";" >> $PT_HEADER_PATH
+
+# Generate the torrc header
+# Since RicochetRefresh generates a default torrc at runtime, we put the contents
+# of the PT torrc config in a header, with those contents being included when
+# RicochetRefresh generates the default torrc
+#TODO: At some point it'd be nice to have some way of automatically generating
+# these torrc appendices based on the ones in tor-browser-build
+[% IF c("var/osx") -%]
+TORRC_DEFAULT_APPENDIX=$rootdir/resources/darwin/default_torrc-appendix
+[% END -%]
+[% IF c("var/linux") -%]
+TORRC_DEFAULT_APPENDIX=$rootdir/resources/linux/default_torrc-appendix
+[% END -%]
+[% IF c("var/windows") -%]
+TORRC_DEFAULT_APPENDIX=$rootdir/resources/windows/default_torrc-appendix
+[% END -%]
+
+TORRC_HEADER_PATH=/var/tmp/build/[% project %]-[% c('version') %]/src/libtego/source/torrc.hpp
+echo "#pragma once" > "$TORRC_HEADER_PATH"
+echo "const std::string defaultTorrcPluggableConfig =" >> "$TORRC_HEADER_PATH"
+while read -r line
+do
+    echo "\"$line\\n\"" >> "$TORRC_HEADER_PATH"
+done < "$TORRC_DEFAULT_APPENDIX"
+echo ";" >> $TORRC_HEADER_PATH
+
 # clang needs to be reminded where its c++ includes are
 [% IF c("var/osx") -%]
 cppincludes=/var/tmp/dist/macosx-toolchain/clang/include/c++/v1
